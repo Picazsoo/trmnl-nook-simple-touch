@@ -32,6 +32,7 @@ public class SettingsActivity extends Activity {
     private CheckBox fileLoggingCheck;
     private CheckBox giftModeCheck;
     private CheckBox showcaseModeCheck;
+    private CheckBox swipeReversedCheck;
     private Button giftSettingsButton;
     private TextView sleepHint;
     private CheckBox allowHttpCheck;
@@ -150,6 +151,20 @@ public class SettingsActivity extends Activity {
                 flashRefresh();
             }
         });
+
+        panelGeneral.addView(createSectionLabel("Swipe"));
+        swipeReversedCheck = new CheckBox(this);
+        swipeReversedCheck.setText("Reverse swipe direction");
+        swipeReversedCheck.setTextColor(0xFF000000);
+        swipeReversedCheck.setChecked(ApiPrefs.isSwipeReversed(this));
+        panelGeneral.addView(swipeReversedCheck);
+
+        TextView swipeHint = new TextView(this);
+        swipeHint.setText("Swipe left on the screen for the next screen, right for the previous one. Tick to swap them.");
+        swipeHint.setTextSize(11);
+        swipeHint.setTextColor(0xFF888888);
+        swipeHint.setPadding(40, 0, 0, 8);
+        panelGeneral.addView(swipeHint);
 
         panelGeneral.addView(createSectionLabel("Showcase Mode"));
         showcaseModeCheck = new CheckBox(this);
@@ -569,6 +584,7 @@ public class SettingsActivity extends Activity {
         if (fileLoggingCheck != null) fileLoggingCheck.setChecked(ApiPrefs.isFileLoggingEnabled(this));
         if (giftModeCheck != null) giftModeCheck.setChecked(ApiPrefs.isGiftModeEnabled(this));
         if (showcaseModeCheck != null) showcaseModeCheck.setChecked(ApiPrefs.isShowcaseModeEnabled(this));
+        if (swipeReversedCheck != null) swipeReversedCheck.setChecked(ApiPrefs.isSwipeReversed(this));
         if (sleepHint != null) sleepHint.setVisibility(View.VISIBLE);
         if (giftSettingsButton != null && giftModeCheck != null) {
             giftSettingsButton.setVisibility(giftModeCheck.isChecked() ? View.VISIBLE : View.GONE);
@@ -594,6 +610,7 @@ public class SettingsActivity extends Activity {
             FileLogger.setEnabled(enabled);
         }
         if (giftModeCheck != null) ApiPrefs.setGiftModeEnabled(this, giftModeCheck.isChecked());
+        if (swipeReversedCheck != null) ApiPrefs.setSwipeReversed(this, swipeReversedCheck.isChecked());
         if (allowHttpCheck != null) ApiPrefs.setAllowHttp(this, allowHttpCheck.isChecked());
         if (allowSelfSignedCheck != null) ApiPrefs.setAllowSelfSignedCerts(this, allowSelfSignedCheck.isChecked());
         if (autoDisableWifiCheck != null) ApiPrefs.setAutoDisableWifi(this, autoDisableWifiCheck.isChecked());

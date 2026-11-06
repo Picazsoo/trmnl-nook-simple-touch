@@ -339,6 +339,19 @@ public class ApiPrefs {
                 .putString(key, name != null ? name.trim() : "").commit();
     }
 
+    private static final String KEY_SWIPE_REVERSED = "swipe_reversed";
+
+    /** When true, swipe right = next and swipe left = previous (default is the opposite). */
+    public static boolean isSwipeReversed(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_SWIPE_REVERSED, false);
+    }
+
+    public static void setSwipeReversed(Context context, boolean reversed) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putBoolean(KEY_SWIPE_REVERSED, reversed).commit();
+    }
+
     public static boolean isShowcaseModeEnabled(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         return prefs.getBoolean(KEY_SHOWCASE_MODE, false);

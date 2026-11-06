@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Swipe to advance** - Swipe anywhere on the displayed image (any direction) to load the next playlist screen, same as tapping the screen and choosing Next. Taps still open the menu. Inactive while the menu is open, on the boot/log screen, and in gift mode.
+- **Swipe to change screens, like the TRMNL X touch bar** - Swipe left on the displayed image for the next playlist screen (same as Menu → Next) and right for the previous one. Up/down swipes also go to the next screen, and taps still open the menu. "Previous" sends the same `special_function: rewind` header the TRMNL firmware uses for the touch bar's left tap; if the server answers without an image, the previously shown image is redrawn from memory. `Settings → General → Reverse swipe direction` swaps left and right. Inactive while the menu is open, on the boot/log screen, and in gift mode.
 
 ## [v0.16.0] - 2026-08-31
 

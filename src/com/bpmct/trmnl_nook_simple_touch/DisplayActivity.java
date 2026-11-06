@@ -112,6 +112,10 @@ public class DisplayActivity extends Activity {
     private volatile long refreshMs = DEFAULT_REFRESH_MS;
     /** Last displayed API image; used for screensaver file when allow-sleep + write-screensaver. */
     private Bitmap lastDisplayedImage;
+    /** The image shown before lastDisplayedImage — swipe-back fallback when the server sends no image. */
+    private Bitmap previousDisplayedImage;
+    /** One-shot: the next API request asks for the previous screen (special_function: rewind). */
+    private volatile boolean rewindPending = false;
     /** Reason for current fetch (for logging) */
     private volatile String fetchReason = "unknown";
     private String showcaseApiId;    // non-null when running as showcase cell
@@ -898,20 +902,62 @@ public class DisplayActivity extends Activity {
         }
     }
 
-    /** Minimum finger travel (px, any direction) for a touch to count as a swipe. */
+    /**
+     * Go back to the previous playlist screen, like the TRMNL X touch bar's left
+     * tap: the next /api/display request carries special_function: rewind. Current
+     * servers answer with the previous screen's image_url; if one answers without
+     * an image, the previous image kept in memory is shown instead.
+     */
+    private void requestPreviousScreen() {
+        if (USE_GENERIC_IMAGE) {
+            requestNextScreen();
+            return;
+        }
+        rewindPending = true;
+        fetchReason = "swipe-previous";
+        showMenuStatus("Loading previous...", false);
+        startFetch();
+    }
+
+    /** Show a cached bitmap as the current screen (no fetch), then resume the normal cycle. */
+    private void showCachedPreviousImage(Bitmap bmp) {
+        hideBootScreen();
+        hideNoWifiOverlay();
+        if (bootLayout != null) bootLayout.setVisibility(View.GONE);
+        imageView.setImageBitmap(bmp);
+        lastDisplayedImage = bmp;
+        writeScreenshotToScreensaver(bmp);
+        imageView.setVisibility(View.VISIBLE);
+        if (imageRotateLayout != null) imageRotateLayout.setVisibility(View.VISIBLE);
+        if (contentScroll != null) contentScroll.setVisibility(View.GONE);
+        if (logView != null) logView.setVisibility(View.GONE);
+        hideMenu();
+        logD("displayed cached previous image");
+        forceFullRefresh();
+        scheduleNextCycle();
+    }
+
+    /** Minimum finger travel (px) for a touch to count as a swipe. */
     private static final int SWIPE_MIN_DISTANCE_PX = 120;
     private float swipeDownX;
     private float swipeDownY;
     private boolean swipeTracking = false;
 
     /**
-     * Swipe anywhere on the image (any direction) to advance to the next screen,
-     * same as Menu → Next. Detected at the activity level so it works over every
-     * child view; the distance check is direction-agnostic, so the RotateLayout's
-     * 90° coordinate swap doesn't matter. When a swipe is recognised the views get
-     * ACTION_CANCEL instead of ACTION_UP, so the tap-to-toggle-menu click does not
-     * also fire. Only active while the image is shown; disabled while the menu is
-     * open and in gift mode (where Next is "Gallery").
+     * Swipe on the image to change screens, like the TRMNL X touch bar:
+     * swipe left = next, swipe right = previous (Settings → General → "Reverse
+     * swipe direction" swaps them); swipes up/down also go to the next screen.
+     *
+     * Events here are in physical screen coordinates, while the UI is drawn
+     * through a 90° RotateLayout (see AGENTS.md: child-X → physical-Y), so the
+     * user's left/right is the physical Y axis: a swipe right, as the user sees
+     * it, increases raw Y.
+     *
+     * Detected at the activity level so it works over every child view. When a
+     * swipe is recognised the views get ACTION_CANCEL instead of ACTION_UP, so the
+     * tap-to-toggle-menu click does not also fire. Only active while the image is
+     * shown; disabled while the menu is open and in gift mode (where Next is
+     * "Gallery").
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
@@ -928,15 +974,26 @@ public class DisplayActivity extends Activity {
             case MotionEvent.ACTION_UP:
                 if (swipeTracking) {
                     swipeTracking = false;
-                    float dx = Math.abs(ev.getX() - swipeDownX);
-                    float dy = Math.abs(ev.getY() - swipeDownY);
-                    if (Math.max(dx, dy) >= SWIPE_MIN_DISTANCE_PX) {
+                    float rawDx = ev.getX() - swipeDownX;
+                    float rawDy = ev.getY() - swipeDownY;
+                    float adx = Math.abs(rawDx);
+                    float ady = Math.abs(rawDy);
+                    if (Math.max(adx, ady) >= SWIPE_MIN_DISTANCE_PX) {
                         MotionEvent cancel = MotionEvent.obtain(ev);
                         cancel.setAction(MotionEvent.ACTION_CANCEL);
                         super.dispatchTouchEvent(cancel);
                         cancel.recycle();
-                        logD("swipe: next");
-                        requestNextScreen();
+                        // Physical Y is the user's horizontal axis (see above).
+                        boolean horizontal = ady > adx;
+                        boolean swipedRight = rawDy > 0;
+                        if (ApiPrefs.isSwipeReversed(this)) swipedRight = !swipedRight;
+                        if (horizontal && swipedRight) {
+                            logD("swipe: previous (dx=" + rawDx + " dy=" + rawDy + ")");
+                            requestPreviousScreen();
+                        } else {
+                            logD("swipe: next (dx=" + rawDx + " dy=" + rawDy + ")");
+                            requestNextScreen();
+                        }
                         return true;
                     }
                 }
@@ -1430,12 +1487,17 @@ public class DisplayActivity extends Activity {
         String httpsUrl = resolveApiBaseUrl() + API_DISPLAY_PATH;
         logD("fetch reason=" + fetchReason + " wifi=" + getWifiStateString());
         logD("start: " + httpsUrl);
+        // Consume the one-shot rewind request here, when the request actually starts
+        // (startFetch may first wait for Wi-Fi and come back through this path).
+        final boolean rewind = rewindPending;
+        rewindPending = false;
         currentFetchTask = ApiFetchTask.start(
                 this,
                 httpsUrl,
                 resolveApiId(),
                 resolveApiToken(),
-                fetchToken);
+                fetchToken,
+                rewind);
         if (currentFetchTask == null) {
             logW("fetch task did not start");
             clearActiveFetch(true);
@@ -2390,17 +2452,22 @@ public class DisplayActivity extends Activity {
         private final String apiId;
         private final String apiToken;
         private final int fetchToken;
-        private ApiFetchTask(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken) {
+        /** Ask the server for the previous screen instead of the next one. */
+        private final boolean rewind;
+        private ApiFetchTask(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken,
+                             boolean rewind) {
             this.activityRef = new WeakReference(activity);
             this.httpsUrl = httpsUrl;
             this.apiId = apiId;
             this.apiToken = apiToken;
             this.fetchToken = fetchToken;
+            this.rewind = rewind;
         }
 
-        public static ApiFetchTask start(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken) {
+        public static ApiFetchTask start(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken,
+                                         boolean rewind) {
             if (activity == null || httpsUrl == null) return null;
-            ApiFetchTask task = new ApiFetchTask(activity, httpsUrl, apiId, apiToken, fetchToken);
+            ApiFetchTask task = new ApiFetchTask(activity, httpsUrl, apiId, apiToken, fetchToken, rewind);
             try {
                 task.execute(new Object[] { httpsUrl });
                 return task;
@@ -2421,7 +2488,8 @@ public class DisplayActivity extends Activity {
             // Try BouncyCastle TLS first (supports TLS 1.2)
             if (BouncyCastleHttpClient.isAvailable()) {
                 if (a != null) a.logD("trying BouncyCastle TLS 1.2");
-                Hashtable headers = buildApiHeaders(apiId, apiToken, batteryPercent, rssi);
+                Hashtable headers = buildApiHeaders(apiId, apiToken, batteryPercent, rssi, rewind);
+                if (a != null && rewind) a.logD("special_function: rewind (previous screen)");
                 
                 // Try up to 2 times with 3s backoff
                 String bcResult = null;
@@ -2496,6 +2564,9 @@ public class DisplayActivity extends Activity {
                 }
                 if (rssi != -999) {
                     conn.setRequestProperty("rssi", String.valueOf(rssi));
+                }
+                if (rewind) {
+                    conn.setRequestProperty(HEADER_SPECIAL_FUNCTION, SPECIAL_FUNCTION_REWIND);
                 }
 
                 // Explicit connect for API 7
@@ -2593,6 +2664,13 @@ public class DisplayActivity extends Activity {
                     a.hideBootScreen();
                     a.hideNoWifiOverlay();
                     if (a.bootLayout != null) a.bootLayout.setVisibility(View.GONE);
+                    // Remember what was on screen for the swipe-back fallback. After a
+                    // rewind we no longer know what precedes the new screen, so clear it.
+                    if (rewind) {
+                        a.previousDisplayedImage = null;
+                    } else if (a.lastDisplayedImage != null && a.lastDisplayedImage != ar.bitmap) {
+                        a.previousDisplayedImage = a.lastDisplayedImage;
+                    }
                     a.imageView.setImageBitmap(ar.bitmap);
                     a.lastDisplayedImage = ar.bitmap;
                     // Always write screensaver immediately so TRMNL appears in NOOK's screensaver list
@@ -2628,6 +2706,18 @@ public class DisplayActivity extends Activity {
                     if (pct >= 0) a.logD("Percent-Charged: " + pct);
                     int rssi = getWifiRssi(a);
                     if (rssi != -999) a.logD("rssi: " + rssi);
+                    return;
+                }
+
+                // Rewind answered without an image (older servers reply action "rewind"
+                // and expect the device to redraw its cached previous image, like the
+                // firmware's /last.bmp) - show the previous screen from memory.
+                if (rewind && a.previousDisplayedImage != null) {
+                    if (ar.rawText != null) a.logD("response body:\n" + ar.rawText);
+                    a.logD("rewind: no image in response - showing cached previous screen");
+                    Bitmap prev = a.previousDisplayedImage;
+                    a.previousDisplayedImage = null;
+                    a.showCachedPreviousImage(prev);
                     return;
                 }
 
@@ -2705,8 +2795,19 @@ public class DisplayActivity extends Activity {
         }
     }
 
-    private static Hashtable buildApiHeaders(String apiId, String apiToken, int batteryPercent, int rssi) {
+    /**
+     * Header the TRMNL firmware sends to ask /api/display for the previous screen
+     * (TRMNL X touch bar left tap: special_function=SF_REWIND, sent by name).
+     */
+    private static final String HEADER_SPECIAL_FUNCTION = "special_function";
+    private static final String SPECIAL_FUNCTION_REWIND = "rewind";
+
+    private static Hashtable buildApiHeaders(String apiId, String apiToken, int batteryPercent, int rssi,
+                                             boolean rewind) {
         Hashtable headers = new Hashtable();
+        if (rewind) {
+            headers.put(HEADER_SPECIAL_FUNCTION, SPECIAL_FUNCTION_REWIND);
+        }
         headers.put("User-Agent", "TRMNL-Nook/1.0 (Android 2.1)");
         headers.put("Accept", "application/json");
         if (apiId != null) {
