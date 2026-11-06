@@ -32,6 +32,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.view.Gravity;
@@ -999,7 +1000,7 @@ public class DisplayActivity extends Activity {
         // *old* image before the new one is drawn - only do it if a menu is open.
         if (menuVisible) hideMenu();
         logD("displayed cached image");
-        forceFullRefresh();
+        refreshAfterNextDraw();
         // PNG-compressing the screensaver takes a second or two on the NOOK; doing it
         // here on the UI thread delayed the new image. Write it in the background
         // once the image is on screen.
@@ -2405,6 +2406,45 @@ public class DisplayActivity extends Activity {
         }, 100);
     }
     
+    /**
+     * Full e-ink refresh once the *new* frame is in the framebuffer. forceFullRefresh()
+     * waits a fixed 100 ms, but drawing a full-screen bitmap through the rotated
+     * layout can take longer on the NOOK - the refresh then pushed the old frame
+     * (a flash of the screen being replaced) and the new one appeared later.
+     * Here a pre-draw listener posts the refresh to run right after that draw; a
+     * fallback timer still refreshes if no draw happens.
+     */
+    private void refreshAfterNextDraw() {
+        final View root = getWindow().getDecorView();
+        if (root == null) {
+            forceFullRefresh();
+            return;
+        }
+        final boolean[] done = new boolean[1];
+        final Runnable refresh = new Runnable() {
+            public void run() {
+                if (done[0]) return;
+                done[0] = true;
+                triggerEpdRefresh();
+            }
+        };
+        root.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            public boolean onPreDraw() {
+                ViewTreeObserver o = root.getViewTreeObserver();
+                if (o.isAlive()) o.removeOnPreDrawListener(this);
+                // Posted from inside the traversal, so it runs after this draw completes.
+                root.post(refresh);
+                return true;
+            }
+        });
+        if (imageRotateLayout != null) {
+            imageRotateLayout.requestLayout();
+            imageRotateLayout.invalidate();
+        }
+        root.invalidate();
+        root.postDelayed(refresh, 1000); // fallback if no draw pass comes
+    }
+
     /** Trigger NOOK Simple Touch hardware e-ink refresh via sysfs. */
     private void triggerEpdRefresh() {
         try {
