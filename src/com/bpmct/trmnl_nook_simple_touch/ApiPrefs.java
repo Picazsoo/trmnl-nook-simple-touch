@@ -346,20 +346,21 @@ public class ApiPrefs {
                 .putString(key, name != null ? name.trim() : "").commit();
     }
 
-    private static final String KEY_STAY_ON_SCREEN = "stay_on_screen";
+    private static final String KEY_TWO_SCREEN_MODE = "two_screen_mode";
 
     /**
-     * When true, scheduled refreshes re-fetch the current screen (/api/display/current)
-     * instead of advancing the playlist; only swipes and Next change screens.
+     * Two-screen mode (see ScreenCache): refreshes fetch both screens of a two-item
+     * playlist and keep showing the selected one; swipes flip between the two
+     * cached screens without a download.
      */
-    public static boolean isStayOnScreen(Context context) {
+    public static boolean isTwoScreenMode(Context context) {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getBoolean(KEY_STAY_ON_SCREEN, false);
+                .getBoolean(KEY_TWO_SCREEN_MODE, false);
     }
 
-    public static void setStayOnScreen(Context context, boolean enabled) {
+    public static void setTwoScreenMode(Context context, boolean enabled) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                .putBoolean(KEY_STAY_ON_SCREEN, enabled).commit();
+                .putBoolean(KEY_TWO_SCREEN_MODE, enabled).commit();
     }
 
     private static final String KEY_SWIPE_REVERSED = "swipe_reversed";

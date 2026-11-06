@@ -28,6 +28,8 @@ final class TrmnlApiResponseParser {
         final Bitmap bitmap;
         final String imageUrl;
         final int refreshRateSeconds;
+        /** The response's "filename" (e.g. plugin-abc123-1771674964), identifies the screen. May be null. */
+        final String filename;
 
         Result(String rawText) {
             this.rawText = rawText;
@@ -35,14 +37,16 @@ final class TrmnlApiResponseParser {
             this.bitmap = null;
             this.imageUrl = null;
             this.refreshRateSeconds = -1;
+            this.filename = null;
         }
 
-        Result(String rawText, int refreshRateSeconds, String imageUrl, Bitmap bitmap) {
+        Result(String rawText, int refreshRateSeconds, String imageUrl, Bitmap bitmap, String filename) {
             this.rawText = rawText;
             this.showImage = true;
             this.bitmap = bitmap;
             this.imageUrl = imageUrl;
             this.refreshRateSeconds = refreshRateSeconds;
+            this.filename = filename;
         }
     }
 
@@ -110,7 +114,9 @@ final class TrmnlApiResponseParser {
                 bitmap = rotate90(bitmap);
             }
 
-            return new Result(jsonText, refreshRateSeconds, imageUrl, bitmap);
+            String filename = obj.optString("filename", null);
+            if (filename != null && filename.length() == 0) filename = null;
+            return new Result(jsonText, refreshRateSeconds, imageUrl, bitmap, filename);
         } catch (Throwable t) {
             if (log != null) log.logW("response parse failed: " + t);
             return new Result(jsonText);

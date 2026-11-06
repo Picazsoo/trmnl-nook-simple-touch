@@ -33,7 +33,7 @@ public class SettingsActivity extends Activity {
     private CheckBox giftModeCheck;
     private CheckBox showcaseModeCheck;
     private CheckBox swipeReversedCheck;
-    private CheckBox stayOnScreenCheck;
+    private CheckBox twoScreenCheck;
     private Button giftSettingsButton;
     private TextView sleepHint;
     private CheckBox allowHttpCheck;
@@ -182,18 +182,18 @@ public class SettingsActivity extends Activity {
         });
 
         panelGeneral.addView(createSectionLabel("Swipe"));
-        stayOnScreenCheck = new CheckBox(this);
-        stayOnScreenCheck.setText("Stay on the screen I swipe to");
-        stayOnScreenCheck.setTextColor(0xFF000000);
-        stayOnScreenCheck.setChecked(ApiPrefs.isStayOnScreen(this));
-        panelGeneral.addView(stayOnScreenCheck);
+        twoScreenCheck = new CheckBox(this);
+        twoScreenCheck.setText("Two-screen mode");
+        twoScreenCheck.setTextColor(0xFF000000);
+        twoScreenCheck.setChecked(ApiPrefs.isTwoScreenMode(this));
+        panelGeneral.addView(twoScreenCheck);
 
-        TextView stayHint = new TextView(this);
-        stayHint.setText("Refreshes keep updating the current screen instead of moving through the playlist. Swipe or Next to change screens.");
-        stayHint.setTextSize(11);
-        stayHint.setTextColor(0xFF888888);
-        stayHint.setPadding(40, 0, 0, 8);
-        panelGeneral.addView(stayHint);
+        TextView twoScreenHint = new TextView(this);
+        twoScreenHint.setText("For a two-item playlist: each refresh downloads both screens and keeps showing the one you chose. Swiping flips between them instantly, without downloading.");
+        twoScreenHint.setTextSize(11);
+        twoScreenHint.setTextColor(0xFF888888);
+        twoScreenHint.setPadding(40, 0, 0, 8);
+        panelGeneral.addView(twoScreenHint);
 
         swipeReversedCheck = new CheckBox(this);
         swipeReversedCheck.setText("Reverse swipe direction");
@@ -627,7 +627,7 @@ public class SettingsActivity extends Activity {
         if (giftModeCheck != null) giftModeCheck.setChecked(ApiPrefs.isGiftModeEnabled(this));
         if (showcaseModeCheck != null) showcaseModeCheck.setChecked(ApiPrefs.isShowcaseModeEnabled(this));
         if (swipeReversedCheck != null) swipeReversedCheck.setChecked(ApiPrefs.isSwipeReversed(this));
-        if (stayOnScreenCheck != null) stayOnScreenCheck.setChecked(ApiPrefs.isStayOnScreen(this));
+        if (twoScreenCheck != null) twoScreenCheck.setChecked(ApiPrefs.isTwoScreenMode(this));
         if (sleepHint != null) sleepHint.setVisibility(View.VISIBLE);
         if (giftSettingsButton != null && giftModeCheck != null) {
             giftSettingsButton.setVisibility(giftModeCheck.isChecked() ? View.VISIBLE : View.GONE);
@@ -655,7 +655,7 @@ public class SettingsActivity extends Activity {
         }
         if (giftModeCheck != null) ApiPrefs.setGiftModeEnabled(this, giftModeCheck.isChecked());
         if (swipeReversedCheck != null) ApiPrefs.setSwipeReversed(this, swipeReversedCheck.isChecked());
-        if (stayOnScreenCheck != null) ApiPrefs.setStayOnScreen(this, stayOnScreenCheck.isChecked());
+        if (twoScreenCheck != null) ApiPrefs.setTwoScreenMode(this, twoScreenCheck.isChecked());
         if (allowHttpCheck != null) ApiPrefs.setAllowHttp(this, allowHttpCheck.isChecked());
         if (allowSelfSignedCheck != null) ApiPrefs.setAllowSelfSignedCerts(this, allowSelfSignedCheck.isChecked());
         if (autoDisableWifiCheck != null) ApiPrefs.setAutoDisableWifi(this, autoDisableWifiCheck.isChecked());

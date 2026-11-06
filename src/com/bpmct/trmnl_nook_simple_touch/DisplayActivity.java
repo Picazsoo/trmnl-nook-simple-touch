@@ -63,8 +63,6 @@ public class DisplayActivity extends Activity {
     private static final String TAG = "TRMNLAPI";
     private static final long DEFAULT_REFRESH_MS = 15 * 60 * 1000;
     private static final String API_DISPLAY_PATH = "/display";
-    /** Returns the screen currently shown without advancing the playlist (TRMNL API). */
-    private static final String API_DISPLAY_CURRENT_PATH = "/display/current";
     private static final String ALARM_REFRESH_ACTION = "com.bpmct.trmnl_nook_simple_touch.ALARM_REFRESH_ACTION";
     private static final int MAX_WIFI_RECOVERY_ATTEMPTS = 2;
     private static final long FETCH_WATCHDOG_MS = 5 * 60 * 1000;
@@ -962,8 +960,32 @@ public class DisplayActivity extends Activity {
         startFetch();
     }
 
-    /** Show a cached bitmap as the current screen (no fetch), then resume the normal cycle. */
-    private void showCachedPreviousImage(Bitmap bmp) {
+    /**
+     * Two-screen mode swipe: flip to the other cached screen instantly - no
+     * download. If nothing is cached to flip to yet, fetch one instead.
+     */
+    private void flipTwoScreen() {
+        ScreenCache cache = ScreenCache.get(this);
+        String other = cache.getOtherId();
+        Bitmap bmp = (other != null) ? cache.getBitmap(other) : null;
+        if (bmp == null) {
+            logD("two-screen: nothing cached to flip to - fetching the next screen");
+            swipeToNextScreen();
+            return;
+        }
+        cache.select(other);
+        logD("two-screen: flipped to " + other + " " + cache.describe());
+        // Leave the refresh schedule alone (flipping must not postpone the next
+        // refresh); the touch itself already re-armed the idle-sleep countdown.
+        showCachedImage(bmp, false);
+    }
+
+    private void showCachedImage(Bitmap bmp) {
+        showCachedImage(bmp, true);
+    }
+
+    /** Show a cached bitmap as the current screen (no fetch), optionally resuming the normal cycle. */
+    private void showCachedImage(Bitmap bmp, boolean resumeCycle) {
         hideBootScreen();
         hideNoWifiOverlay();
         if (bootLayout != null) bootLayout.setVisibility(View.GONE);
@@ -975,9 +997,9 @@ public class DisplayActivity extends Activity {
         if (contentScroll != null) contentScroll.setVisibility(View.GONE);
         if (logView != null) logView.setVisibility(View.GONE);
         hideMenu();
-        logD("displayed cached previous image");
+        logD("displayed cached image");
         forceFullRefresh();
-        scheduleNextCycle();
+        if (resumeCycle) scheduleNextCycle();
     }
 
     /** Minimum finger travel (px) for a touch to count as a swipe. */
@@ -1066,7 +1088,11 @@ public class DisplayActivity extends Activity {
                         boolean horizontal = ady > adx;
                         boolean swipedRight = rawDy > 0;
                         if (ApiPrefs.isSwipeReversed(this)) swipedRight = !swipedRight;
-                        if (horizontal && swipedRight) {
+                        if (ApiPrefs.isTwoScreenMode(this) && !isShowcaseCell()) {
+                            // Two screens: any swipe flips to the other one.
+                            logD("swipe: flip (dx=" + rawDx + " dy=" + rawDy + ")");
+                            flipTwoScreen();
+                        } else if (horizontal && swipedRight) {
                             logD("swipe: previous (dx=" + rawDx + " dy=" + rawDy + ")");
                             swipeToPreviousScreen();
                         } else {
@@ -1595,14 +1621,14 @@ public class DisplayActivity extends Activity {
         // (startFetch may first wait for Wi-Fi and come back through this path).
         final boolean rewind = rewindPending;
         rewindPending = false;
-        // Stay-on-screen mode: refreshes the user didn't ask for (timer, wake alarm,
-        // launch) re-fetch the current screen instead of advancing the playlist, so
-        // the screen picked by the last swipe / Next keeps updating. Swipes and
-        // Next (fetchStartedFromMenu) and rewinds still use /display.
-        String currentScreenUrl = null;
-        if (!rewind && !fetchStartedFromMenu && !isShowcaseCell() && ApiPrefs.isStayOnScreen(this)) {
-            currentScreenUrl = resolveApiBaseUrl() + API_DISPLAY_CURRENT_PATH;
-            logD("stay-on-screen: refreshing current screen " + currentScreenUrl);
+        // Two-screen mode: refreshes the user didn't ask for (timer, wake alarm,
+        // launch) fetch both screens and keep showing the selected one; Next and
+        // swipe-fallback fetches (fetchStartedFromMenu) fetch once and select it.
+        int twoScreenFetches = 0;
+        if (!rewind && !isShowcaseCell() && ApiPrefs.isTwoScreenMode(this)) {
+            twoScreenFetches = fetchStartedFromMenu ? 1 : ScreenCache.SLOTS;
+            logD("two-screen: " + (twoScreenFetches == 1 ? "fetching one screen (user request)"
+                    : "refreshing both screens"));
         }
         currentFetchTask = ApiFetchTask.start(
                 this,
@@ -1611,7 +1637,7 @@ public class DisplayActivity extends Activity {
                 resolveApiToken(),
                 fetchToken,
                 rewind,
-                currentScreenUrl);
+                twoScreenFetches);
         if (currentFetchTask == null) {
             logW("fetch task did not start");
             clearActiveFetch(true);
@@ -2599,24 +2625,24 @@ public class DisplayActivity extends Activity {
         private final int fetchToken;
         /** Ask the server for the previous screen instead of the next one. */
         private final boolean rewind;
-        /** If set, try this non-advancing "current screen" URL first (stay-on-screen mode). */
-        private final String currentScreenUrl;
+        /** Two-screen mode: 0 = off, 1 = fetch once and select it, 2 = refresh both screens. */
+        private final int twoScreenFetches;
         private ApiFetchTask(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken,
-                             boolean rewind, String currentScreenUrl) {
+                             boolean rewind, int twoScreenFetches) {
             this.activityRef = new WeakReference(activity);
             this.httpsUrl = httpsUrl;
             this.apiId = apiId;
             this.apiToken = apiToken;
             this.fetchToken = fetchToken;
             this.rewind = rewind;
-            this.currentScreenUrl = currentScreenUrl;
+            this.twoScreenFetches = twoScreenFetches;
         }
 
         public static ApiFetchTask start(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken,
-                                         boolean rewind, String currentScreenUrl) {
+                                         boolean rewind, int twoScreenFetches) {
             if (activity == null || httpsUrl == null) return null;
             ApiFetchTask task = new ApiFetchTask(activity, httpsUrl, apiId, apiToken, fetchToken, rewind,
-                    currentScreenUrl);
+                    twoScreenFetches);
             try {
                 task.execute(new Object[] { httpsUrl });
                 return task;
@@ -2628,29 +2654,46 @@ public class DisplayActivity extends Activity {
 
         protected Object doInBackground(Object[] params) {
             String httpsUrl = (String) params[0];
-            if (currentScreenUrl != null) {
-                // "Stay on the screen I swipe to": re-fetch the current screen
-                // (fresh render, playlist not advanced). Fall back to the normal
-                // advancing request if the server has no current screen yet (404)
-                // or doesn't support the endpoint (e.g. some BYOS servers).
-                Object current = fetchDisplay(currentScreenUrl);
-                if (current instanceof ApiResult && ((ApiResult) current).showImage
-                        && ((ApiResult) current).bitmap != null) {
-                    return current;
+            DisplayActivity a = (DisplayActivity) activityRef.get();
+            if (twoScreenFetches <= 0 || a == null) {
+                return fetchDisplay(httpsUrl);
+            }
+            // Two-screen mode. A refresh (twoScreenFetches == 2) asks /api/display twice:
+            // with a two-item playlist that returns both screens freshly rendered and
+            // leaves the server's playlist where it started. Each render is stored in
+            // the slot for its screen id, and the *selected* screen is what gets shown.
+            // A user request (== 1: Next, or a swipe with nothing cached to flip to)
+            // fetches once and selects the result.
+            ScreenCache cache = ScreenCache.get(a);
+            ApiResult first = null;
+            Object last = null;
+            for (int i = 0; i < twoScreenFetches; i++) {
+                Object r = fetchDisplay(httpsUrl);
+                last = r;
+                if (!(r instanceof ApiResult) || !((ApiResult) r).hasImage()) {
+                    a = (DisplayActivity) activityRef.get();
+                    if (a != null) a.logW("two-screen: fetch " + (i + 1) + "/" + twoScreenFetches + " gave no image");
+                    break; // keep whatever the earlier fetch got
                 }
-                DisplayActivity a = (DisplayActivity) activityRef.get();
-                if (a != null) a.logW("current screen unavailable (" + summarize(current)
-                        + ") - falling back to " + httpsUrl);
+                ApiResult ar = (ApiResult) r;
+                String id = ScreenCache.screenIdFromFilename(ar.filename);
+                if (id == null) {
+                    // No usable filename: fall back to the position in the double fetch,
+                    // which is stable while the server's playlist isn't moved elsewhere.
+                    id = "order-" + i;
+                }
+                cache.put(id, ar.bitmap);
+                if (twoScreenFetches == 1) cache.select(id);
+                if (first == null) first = ar;
+                a = (DisplayActivity) activityRef.get();
+                if (a != null) a.logD("two-screen: cached " + id + " (filename=" + ar.filename + ")");
             }
-            return fetchDisplay(httpsUrl);
-        }
-
-        private static String summarize(Object result) {
-            if (result instanceof ApiResult) {
-                String t = ((ApiResult) result).rawText;
-                return t == null ? "no image" : (t.length() > 120 ? t.substring(0, 120) + "..." : t);
-            }
-            return String.valueOf(result);
+            if (first == null) return last;
+            a = (DisplayActivity) activityRef.get();
+            if (a != null) a.logD("two-screen: cache " + cache.describe());
+            Bitmap show = cache.getSelectedBitmap();
+            if (show == null) show = first.bitmap;
+            return new ApiResult(first.rawText, first.imageUrl, show, first.filename);
         }
 
         private Object fetchDisplay(String httpsUrl) {
@@ -2693,7 +2736,7 @@ public class DisplayActivity extends Activity {
                                 if (r.refreshRateSeconds > 0) {
                                     a.updateRefreshRateSeconds(r.refreshRateSeconds);
                                 }
-                                parsed = new ApiResult(r.rawText, r.imageUrl, r.bitmap);
+                                parsed = new ApiResult(r.rawText, r.imageUrl, r.bitmap, r.filename);
                             } else {
                                 // Preserve previous behavior: still allow refresh rate update even if no image
                                 if (r != null && r.refreshRateSeconds > 0) {
@@ -2842,11 +2885,10 @@ public class DisplayActivity extends Activity {
                     if (a.bootLayout != null) a.bootLayout.setVisibility(View.GONE);
                     // Remember what was on screen for the swipe-back fallback. After a
                     // rewind we no longer know what precedes the new screen, so clear it.
-                    // A stay-on-screen refresh is the same screen re-rendered, so it
-                    // doesn't change which screen came before.
+                    // (Two-screen mode keeps its own cache - see ScreenCache.)
                     if (rewind) {
                         a.previousDisplayedImage = null;
-                    } else if (currentScreenUrl == null
+                    } else if (twoScreenFetches == 0
                             && a.lastDisplayedImage != null && a.lastDisplayedImage != ar.bitmap) {
                         a.previousDisplayedImage = a.lastDisplayedImage;
                     }
@@ -2896,7 +2938,7 @@ public class DisplayActivity extends Activity {
                     a.logD("rewind: no image in response - showing cached previous screen");
                     Bitmap prev = a.previousDisplayedImage;
                     a.previousDisplayedImage = null;
-                    a.showCachedPreviousImage(prev);
+                    a.showCachedImage(prev);
                     return;
                 }
 
@@ -2958,19 +3000,27 @@ public class DisplayActivity extends Activity {
         final boolean showImage;
         final Bitmap bitmap;
         final String imageUrl;
+        /** Response "filename" - identifies the screen (see ScreenCache). May be null. */
+        final String filename;
 
         ApiResult(String rawText) {
             this.rawText = rawText;
             this.showImage = false;
             this.bitmap = null;
             this.imageUrl = null;
+            this.filename = null;
         }
 
-        ApiResult(String rawText, String imageUrl, Bitmap bitmap) {
+        ApiResult(String rawText, String imageUrl, Bitmap bitmap, String filename) {
             this.rawText = rawText;
             this.showImage = true;
             this.bitmap = bitmap;
             this.imageUrl = imageUrl;
+            this.filename = filename;
+        }
+
+        boolean hasImage() {
+            return showImage && bitmap != null;
         }
     }
 
