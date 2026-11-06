@@ -22,6 +22,7 @@ import android.os.SystemClock;
 
 // Local helper for parsing TRMNL API responses + downloading images.
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
@@ -62,6 +63,8 @@ public class DisplayActivity extends Activity {
     private static final String TAG = "TRMNLAPI";
     private static final long DEFAULT_REFRESH_MS = 15 * 60 * 1000;
     private static final String API_DISPLAY_PATH = "/display";
+    /** Returns the screen currently shown without advancing the playlist (TRMNL API). */
+    private static final String API_DISPLAY_CURRENT_PATH = "/display/current";
     private static final String ALARM_REFRESH_ACTION = "com.bpmct.trmnl_nook_simple_touch.ALARM_REFRESH_ACTION";
     private static final int MAX_WIFI_RECOVERY_ATTEMPTS = 2;
     private static final long FETCH_WATCHDOG_MS = 5 * 60 * 1000;
@@ -116,6 +119,10 @@ public class DisplayActivity extends Activity {
     private Bitmap previousDisplayedImage;
     /** One-shot: the next API request asks for the previous screen (special_function: rewind). */
     private volatile boolean rewindPending = false;
+    /** One-shot: the next API request was started by a swipe (user is present - don't sleep after it). */
+    private volatile boolean swipeFetchPending = false;
+    private static final int CORNER_INDICATOR_SIZE_PX = 36;
+    private CornerIndicatorView cornerIndicator;
     /** Reason for current fetch (for logging) */
     private volatile String fetchReason = "unknown";
     private String showcaseApiId;    // non-null when running as showcase cell
@@ -457,6 +464,16 @@ public class DisplayActivity extends Activity {
         root.addView(showcaseStatusView, statusParams);
         showcaseStatusView.bringToFront();
 
+        // Top-left status badge: awake / loading next / loading previous.
+        // root is inside the rotated layout, so TOP|LEFT is the user's top-left.
+        cornerIndicator = new CornerIndicatorView(this);
+        FrameLayout.LayoutParams indicatorParams = new FrameLayout.LayoutParams(
+                CORNER_INDICATOR_SIZE_PX, CORNER_INDICATOR_SIZE_PX, Gravity.TOP | Gravity.LEFT);
+        indicatorParams.leftMargin = 8;
+        indicatorParams.topMargin = 8;
+        root.addView(cornerIndicator, indicatorParams);
+        cornerIndicator.bringToFront();
+
         appRotateLayout = new RotateLayout(this);
         appRotateLayout.setAngle(APP_ROTATION_DEGREES);
         appRotateLayout.addView(root, new FrameLayout.LayoutParams(
@@ -595,6 +612,8 @@ public class DisplayActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Awake and responding to touch (an in-flight swipe fetch keeps its arrow).
+        if (!fetchInProgress) setCornerIndicator(CornerIndicatorView.AWAKE);
         logD("onResume pid=" + android.os.Process.myPid()
                 + " fetchInProgress=" + fetchInProgress
                 + " wifi=" + getWifiStateString());
@@ -908,14 +927,36 @@ public class DisplayActivity extends Activity {
      * servers answer with the previous screen's image_url; if one answers without
      * an image, the previous image kept in memory is shown instead.
      */
-    private void requestPreviousScreen() {
+    private void swipeToPreviousScreen() {
         if (USE_GENERIC_IMAGE) {
-            requestNextScreen();
+            swipeToNextScreen();
+            return;
+        }
+        if (fetchInProgress) {
+            logD("swipe: previous ignored - a fetch is already in progress");
             return;
         }
         rewindPending = true;
+        swipeFetchPending = true;
         fetchReason = "swipe-previous";
-        showMenuStatus("Loading previous...", false);
+        // No menu popup: the corner badge shows a "back" arrow while loading.
+        setCornerIndicator(CornerIndicatorView.BACKWARD);
+        startFetch();
+    }
+
+    /** Next screen from a swipe: like Menu → Next, but shown only as a corner arrow. */
+    private void swipeToNextScreen() {
+        if (USE_GENERIC_IMAGE) {
+            showGenericImageAndSleep();
+            return;
+        }
+        if (fetchInProgress) {
+            logD("swipe: next ignored - a fetch is already in progress");
+            return;
+        }
+        swipeFetchPending = true;
+        fetchReason = "swipe-next";
+        setCornerIndicator(CornerIndicatorView.FORWARD);
         startFetch();
     }
 
@@ -939,70 +980,128 @@ public class DisplayActivity extends Activity {
 
     /** Minimum finger travel (px) for a touch to count as a swipe. */
     private static final int SWIPE_MIN_DISTANCE_PX = 120;
+    /** Finger travel (px) beyond which a press is no longer a long-press candidate. */
+    private static final int LONG_PRESS_SLOP_PX = 24;
+    private static final long LONG_PRESS_MS = 700;
     private float swipeDownX;
     private float swipeDownY;
-    private boolean swipeTracking = false;
+    /** True while a touch over the displayed image is being interpreted as a gesture. */
+    private boolean gestureTracking = false;
+    private boolean longPressFired = false;
+    private final Runnable longPressRunnable = new Runnable() {
+        public void run() {
+            if (!gestureTracking || menuVisible) return;
+            longPressFired = true;
+            logD("long-press: menu");
+            showMenu();
+        }
+    };
 
     /**
-     * Swipe on the image to change screens, like the TRMNL X touch bar:
-     * swipe left = next, swipe right = previous (Settings → General → "Reverse
-     * swipe direction" swaps them); swipes up/down also go to the next screen.
+     * Gestures on the displayed image, like the TRMNL X touch bar:
+     *   swipe left        = next screen      (corner badge shows a forward arrow)
+     *   swipe right       = previous screen  (corner badge shows a back arrow)
+     *   swipe up/down     = next screen
+     *   long-press        = open the menu (Battery / Next / Settings / Exit)
+     *   tap               = nothing, so the menu can't be opened by accident
+     * Settings → General → "Reverse swipe direction" swaps left and right. The
+     * page-turn buttons also open the menu (onKeyDown).
      *
      * Events here are in physical screen coordinates, while the UI is drawn
      * through a 90° RotateLayout (see AGENTS.md: child-X → physical-Y), so the
      * user's left/right is the physical Y axis: a swipe right, as the user sees
      * it, increases raw Y.
      *
-     * Detected at the activity level so it works over every child view. When a
-     * swipe is recognised the views get ACTION_CANCEL instead of ACTION_UP, so the
-     * tap-to-toggle-menu click does not also fire. Only active while the image is
-     * shown; disabled while the menu is open and in gift mode (where Next is
-     * "Gallery").
+     * Detected at the activity level so it works over every child view. A
+     * recognised gesture (or a plain tap) gives the views ACTION_CANCEL instead
+     * of ACTION_UP, so their tap-to-toggle-menu click does not fire. Only active
+     * while the image is shown: on the boot/error screen a tap still opens the
+     * menu ("tap to retry") and drags still scroll the log. Disabled while the
+     * menu is open (taps work normally there) and in gift mode.
      */
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
         switch (ev.getAction()) {
             case MotionEvent.ACTION_DOWN:
-                // Only over the displayed image — the boot/error log and text
-                // content are scrollable, and a scroll drag must not count.
-                swipeTracking = !menuVisible && !giftScreenVisible
+                gestureTracking = !menuVisible && !giftScreenVisible
                         && imageView != null && imageView.getVisibility() == View.VISIBLE
                         && !ApiPrefs.isGiftModeEnabled(this);
+                longPressFired = false;
                 swipeDownX = ev.getX();
                 swipeDownY = ev.getY();
+                refreshHandler.removeCallbacks(longPressRunnable);
+                if (gestureTracking) {
+                    refreshHandler.postDelayed(longPressRunnable, LONG_PRESS_MS);
+                }
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (gestureTracking && !longPressFired) {
+                    float mx = Math.abs(ev.getX() - swipeDownX);
+                    float my = Math.abs(ev.getY() - swipeDownY);
+                    if (Math.max(mx, my) > LONG_PRESS_SLOP_PX) {
+                        refreshHandler.removeCallbacks(longPressRunnable);
+                    }
+                }
                 break;
             case MotionEvent.ACTION_UP:
-                if (swipeTracking) {
-                    swipeTracking = false;
+                refreshHandler.removeCallbacks(longPressRunnable);
+                if (gestureTracking) {
+                    gestureTracking = false;
+                    // Swallow the UP so no child click (menu toggle) fires.
+                    MotionEvent cancel = MotionEvent.obtain(ev);
+                    cancel.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(cancel);
+                    cancel.recycle();
+                    if (longPressFired) {
+                        return true; // menu is already open
+                    }
                     float rawDx = ev.getX() - swipeDownX;
                     float rawDy = ev.getY() - swipeDownY;
                     float adx = Math.abs(rawDx);
                     float ady = Math.abs(rawDy);
                     if (Math.max(adx, ady) >= SWIPE_MIN_DISTANCE_PX) {
-                        MotionEvent cancel = MotionEvent.obtain(ev);
-                        cancel.setAction(MotionEvent.ACTION_CANCEL);
-                        super.dispatchTouchEvent(cancel);
-                        cancel.recycle();
                         // Physical Y is the user's horizontal axis (see above).
                         boolean horizontal = ady > adx;
                         boolean swipedRight = rawDy > 0;
                         if (ApiPrefs.isSwipeReversed(this)) swipedRight = !swipedRight;
                         if (horizontal && swipedRight) {
                             logD("swipe: previous (dx=" + rawDx + " dy=" + rawDy + ")");
-                            requestPreviousScreen();
+                            swipeToPreviousScreen();
                         } else {
                             logD("swipe: next (dx=" + rawDx + " dy=" + rawDy + ")");
-                            requestNextScreen();
+                            swipeToNextScreen();
                         }
-                        return true;
+                    } else {
+                        logD("tap ignored - long-press or a page-turn button opens the menu");
                     }
+                    return true;
                 }
                 break;
             case MotionEvent.ACTION_CANCEL:
-                swipeTracking = false;
+                refreshHandler.removeCallbacks(longPressRunnable);
+                gestureTracking = false;
                 break;
         }
         return super.dispatchTouchEvent(ev);
+    }
+
+    /**
+     * The NOOK's page-turn buttons (and any other key except Back/Home/Power)
+     * toggle the menu. Back keeps its default behaviour; Home and Power never
+     * reach apps on this firmware.
+     */
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK
+                || keyCode == KeyEvent.KEYCODE_HOME
+                || keyCode == KeyEvent.KEYCODE_POWER) {
+            return super.onKeyDown(keyCode, event);
+        }
+        if (event.getRepeatCount() == 0 && !giftScreenVisible) {
+            logD("key " + keyCode + ": toggle menu");
+            toggleMenu();
+        }
+        return true;
     }
 
     @Override
@@ -1469,7 +1568,10 @@ public class DisplayActivity extends Activity {
         cancelWifiRecovery();
         wifiRecoveryAttempts = 0;
         fetchInProgress = true;
-        fetchStartedFromMenu = menuVisible;
+        // A swipe-started fetch is user-initiated like a menu Next: aggressive sleep
+        // must not put the device to sleep right after it renders.
+        fetchStartedFromMenu = menuVisible || swipeFetchPending;
+        swipeFetchPending = false;
         activeFetchToken++;
         final int fetchToken = activeFetchToken;
         // Silent background fetch when aggressive sleep is on, or when running as a
@@ -1491,13 +1593,23 @@ public class DisplayActivity extends Activity {
         // (startFetch may first wait for Wi-Fi and come back through this path).
         final boolean rewind = rewindPending;
         rewindPending = false;
+        // Stay-on-screen mode: refreshes the user didn't ask for (timer, wake alarm,
+        // launch) re-fetch the current screen instead of advancing the playlist, so
+        // the screen picked by the last swipe / Next keeps updating. Swipes and
+        // Next (fetchStartedFromMenu) and rewinds still use /display.
+        String currentScreenUrl = null;
+        if (!rewind && !fetchStartedFromMenu && !isShowcaseCell() && ApiPrefs.isStayOnScreen(this)) {
+            currentScreenUrl = resolveApiBaseUrl() + API_DISPLAY_CURRENT_PATH;
+            logD("stay-on-screen: refreshing current screen " + currentScreenUrl);
+        }
         currentFetchTask = ApiFetchTask.start(
                 this,
                 httpsUrl,
                 resolveApiId(),
                 resolveApiToken(),
                 fetchToken,
-                rewind);
+                rewind,
+                currentScreenUrl);
         if (currentFetchTask == null) {
             logW("fetch task did not start");
             clearActiveFetch(true);
@@ -1525,6 +1637,17 @@ public class DisplayActivity extends Activity {
         return "connected";
     }
 
+    private void setCornerIndicator(int mode) {
+        if (cornerIndicator != null) cornerIndicator.setMode(mode);
+    }
+
+    /** A fetch ended (completed, failed, timed out or was cancelled): arrow back to "awake". */
+    private void onFetchEndedIndicator() {
+        if (cornerIndicator != null && cornerIndicator.getMode() != CornerIndicatorView.NONE) {
+            setCornerIndicator(CornerIndicatorView.AWAKE);
+        }
+    }
+
     private void cancelFetchWatchdog() {
         if (pendingFetchWatchdogRunnable != null) {
             refreshHandler.removeCallbacks(pendingFetchWatchdogRunnable);
@@ -1534,6 +1657,7 @@ public class DisplayActivity extends Activity {
 
     private void clearActiveFetch(boolean invalidateToken) {
         cancelFetchWatchdog();
+        onFetchEndedIndicator();
         currentFetchTask = null;
         fetchInProgress = false;
         fetchStartedFromMenu = false;
@@ -2454,20 +2578,24 @@ public class DisplayActivity extends Activity {
         private final int fetchToken;
         /** Ask the server for the previous screen instead of the next one. */
         private final boolean rewind;
+        /** If set, try this non-advancing "current screen" URL first (stay-on-screen mode). */
+        private final String currentScreenUrl;
         private ApiFetchTask(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken,
-                             boolean rewind) {
+                             boolean rewind, String currentScreenUrl) {
             this.activityRef = new WeakReference(activity);
             this.httpsUrl = httpsUrl;
             this.apiId = apiId;
             this.apiToken = apiToken;
             this.fetchToken = fetchToken;
             this.rewind = rewind;
+            this.currentScreenUrl = currentScreenUrl;
         }
 
         public static ApiFetchTask start(DisplayActivity activity, String httpsUrl, String apiId, String apiToken, int fetchToken,
-                                         boolean rewind) {
+                                         boolean rewind, String currentScreenUrl) {
             if (activity == null || httpsUrl == null) return null;
-            ApiFetchTask task = new ApiFetchTask(activity, httpsUrl, apiId, apiToken, fetchToken, rewind);
+            ApiFetchTask task = new ApiFetchTask(activity, httpsUrl, apiId, apiToken, fetchToken, rewind,
+                    currentScreenUrl);
             try {
                 task.execute(new Object[] { httpsUrl });
                 return task;
@@ -2479,6 +2607,32 @@ public class DisplayActivity extends Activity {
 
         protected Object doInBackground(Object[] params) {
             String httpsUrl = (String) params[0];
+            if (currentScreenUrl != null) {
+                // "Stay on the screen I swipe to": re-fetch the current screen
+                // (fresh render, playlist not advanced). Fall back to the normal
+                // advancing request if the server has no current screen yet (404)
+                // or doesn't support the endpoint (e.g. some BYOS servers).
+                Object current = fetchDisplay(currentScreenUrl);
+                if (current instanceof ApiResult && ((ApiResult) current).showImage
+                        && ((ApiResult) current).bitmap != null) {
+                    return current;
+                }
+                DisplayActivity a = (DisplayActivity) activityRef.get();
+                if (a != null) a.logW("current screen unavailable (" + summarize(current)
+                        + ") - falling back to " + httpsUrl);
+            }
+            return fetchDisplay(httpsUrl);
+        }
+
+        private static String summarize(Object result) {
+            if (result instanceof ApiResult) {
+                String t = ((ApiResult) result).rawText;
+                return t == null ? "no image" : (t.length() > 120 ? t.substring(0, 120) + "..." : t);
+            }
+            return String.valueOf(result);
+        }
+
+        private Object fetchDisplay(String httpsUrl) {
             DisplayActivity a = (DisplayActivity) activityRef.get();
             int batteryPercent = getBatteryPercent(a != null ? a : null);
             int rssi = getWifiRssi(a != null ? a : null);
@@ -2649,6 +2803,7 @@ public class DisplayActivity extends Activity {
             }
 
             a.cancelFetchWatchdog();
+            a.onFetchEndedIndicator();
             a.fetchInProgress = false;
             final boolean fromMenu = a.fetchStartedFromMenu;
             a.fetchStartedFromMenu = false;
@@ -2666,9 +2821,12 @@ public class DisplayActivity extends Activity {
                     if (a.bootLayout != null) a.bootLayout.setVisibility(View.GONE);
                     // Remember what was on screen for the swipe-back fallback. After a
                     // rewind we no longer know what precedes the new screen, so clear it.
+                    // A stay-on-screen refresh is the same screen re-rendered, so it
+                    // doesn't change which screen came before.
                     if (rewind) {
                         a.previousDisplayedImage = null;
-                    } else if (a.lastDisplayedImage != null && a.lastDisplayedImage != ar.bitmap) {
+                    } else if (currentScreenUrl == null
+                            && a.lastDisplayedImage != null && a.lastDisplayedImage != ar.bitmap) {
                         a.previousDisplayedImage = a.lastDisplayedImage;
                     }
                     a.imageView.setImageBitmap(ar.bitmap);

@@ -339,6 +339,22 @@ public class ApiPrefs {
                 .putString(key, name != null ? name.trim() : "").commit();
     }
 
+    private static final String KEY_STAY_ON_SCREEN = "stay_on_screen";
+
+    /**
+     * When true, scheduled refreshes re-fetch the current screen (/api/display/current)
+     * instead of advancing the playlist; only swipes and Next change screens.
+     */
+    public static boolean isStayOnScreen(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_STAY_ON_SCREEN, false);
+    }
+
+    public static void setStayOnScreen(Context context, boolean enabled) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putBoolean(KEY_STAY_ON_SCREEN, enabled).commit();
+    }
+
     private static final String KEY_SWIPE_REVERSED = "swipe_reversed";
 
     /** When true, swipe right = next and swipe left = previous (default is the opposite). */

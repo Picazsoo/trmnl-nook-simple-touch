@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Swipe to change screens, like the TRMNL X touch bar** - Swipe left on the displayed image for the next playlist screen (same as Menu → Next) and right for the previous one. Up/down swipes also go to the next screen, and taps still open the menu. "Previous" sends the same `special_function: rewind` header the TRMNL firmware uses for the touch bar's left tap; if the server answers without an image, the previously shown image is redrawn from memory. `Settings → General → Reverse swipe direction` swaps left and right. Inactive while the menu is open, on the boot/log screen, and in gift mode.
+- **Menu opens on long-press or a page-turn button, not on tap** - Tapping the image no longer pops up Battery / Next / Settings / Exit by accident. Long-press the screen (~0.7 s) or press any page-turn button instead. On the boot/error screen a tap still opens the menu so "tap to retry" keeps working.
+- **Corner status badge** - A small badge in the top-left corner shows a dot while the app is awake and responding to touch, and a forward or back arrow while a swiped-to screen is loading (swipes no longer open the "Loading..." menu).
+- **Stay on the screen I swipe to** (`Settings → General`) - Scheduled refreshes re-fetch the current screen via `/api/display/current` (which doesn't advance the playlist) so the screen you picked keeps updating; only swipes and Next change screens. Falls back to `/api/display` if the server has no current screen yet or doesn't support the endpoint. Off by default.
 
 ## [v0.16.0] - 2026-08-31
 
