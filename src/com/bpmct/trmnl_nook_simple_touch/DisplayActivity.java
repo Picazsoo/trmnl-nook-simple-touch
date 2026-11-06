@@ -1028,8 +1028,9 @@ public class DisplayActivity extends Activity {
      *   swipe up/down     = next screen
      *   long-press        = open the menu (Battery / Next / Settings / Exit)
      *   tap               = nothing, so the menu can't be opened by accident
+     * In two-screen mode any swipe flips between the two cached screens.
      * Settings → General → "Reverse swipe direction" swaps left and right. The
-     * page-turn buttons also open the menu (onKeyDown).
+     * page-turn buttons switch screens the same way (onKeyDown).
      *
      * Events here are in physical screen coordinates, while the UI is drawn
      * through a 90° RotateLayout (see AGENTS.md: child-X → physical-Y), so the
@@ -1088,19 +1089,10 @@ public class DisplayActivity extends Activity {
                         boolean horizontal = ady > adx;
                         boolean swipedRight = rawDy > 0;
                         if (ApiPrefs.isSwipeReversed(this)) swipedRight = !swipedRight;
-                        if (ApiPrefs.isTwoScreenMode(this) && !isShowcaseCell()) {
-                            // Two screens: any swipe flips to the other one.
-                            logD("swipe: flip (dx=" + rawDx + " dy=" + rawDy + ")");
-                            flipTwoScreen();
-                        } else if (horizontal && swipedRight) {
-                            logD("swipe: previous (dx=" + rawDx + " dy=" + rawDy + ")");
-                            swipeToPreviousScreen();
-                        } else {
-                            logD("swipe: next (dx=" + rawDx + " dy=" + rawDy + ")");
-                            swipeToNextScreen();
-                        }
+                        changeScreen(horizontal && swipedRight,
+                                "swipe (dx=" + rawDx + " dy=" + rawDy + ")");
                     } else {
-                        logD("tap ignored - long-press or a page-turn button opens the menu");
+                        logD("tap ignored - long-press opens the menu");
                     }
                     return true;
                 }
@@ -1114,9 +1106,39 @@ public class DisplayActivity extends Activity {
     }
 
     /**
-     * The NOOK's page-turn buttons (and any other key except Back/Home/Power)
-     * toggle the menu. Back keeps its default behaviour; Home and Power never
-     * reach apps on this firmware.
+     * Switch screens - shared by swipes and the page-turn buttons. In two-screen
+     * mode both directions flip to the other cached screen; otherwise "previous"
+     * rewinds and "next" advances the playlist.
+     */
+    private void changeScreen(boolean previous, String source) {
+        if (ApiPrefs.isTwoScreenMode(this) && !isShowcaseCell()) {
+            logD(source + ": flip");
+            flipTwoScreen();
+        } else if (previous) {
+            logD(source + ": previous");
+            swipeToPreviousScreen();
+        } else {
+            logD(source + ": next");
+            swipeToNextScreen();
+        }
+    }
+
+    /** Android KEYCODE_PAGE_UP (API 9+); literal since the app targets API 7. */
+    private static final int KEYCODE_PAGE_UP = 92;
+
+    /** Whether a page-turn key means "previous" (page up / up / left); everything else is "next". */
+    private static boolean isPreviousKey(int keyCode) {
+        return keyCode == KEYCODE_PAGE_UP
+                || keyCode == KeyEvent.KEYCODE_DPAD_UP
+                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT;
+    }
+
+    /**
+     * The NOOK's page-turn buttons (any key except Back/Home/Power/Menu) switch
+     * screens, like a swipe; the menu is opened by long-press only. With the menu
+     * open, a page-turn button closes it. On the boot/error screen (no image yet)
+     * it opens the menu, so retry stays reachable. Back keeps its default
+     * behaviour; Home and Power never reach apps on this firmware.
      */
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
@@ -1125,10 +1147,24 @@ public class DisplayActivity extends Activity {
                 || keyCode == KeyEvent.KEYCODE_POWER) {
             return super.onKeyDown(keyCode, event);
         }
-        if (event.getRepeatCount() == 0 && !giftScreenVisible) {
-            logD("key " + keyCode + ": toggle menu");
+        if (event.getRepeatCount() != 0 || giftScreenVisible) return true;
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            logD("key MENU: toggle menu");
             toggleMenu();
+            return true;
         }
+        if (menuVisible) {
+            logD("key " + keyCode + ": close menu");
+            hideMenu();
+            return true;
+        }
+        boolean imageShown = imageView != null && imageView.getVisibility() == View.VISIBLE;
+        if (!imageShown || ApiPrefs.isGiftModeEnabled(this)) {
+            logD("key " + keyCode + ": no image shown - open menu");
+            showMenu();
+            return true;
+        }
+        changeScreen(isPreviousKey(keyCode), "key " + keyCode);
         return true;
     }
 
