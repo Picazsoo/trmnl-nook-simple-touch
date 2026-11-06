@@ -114,7 +114,7 @@ public class DisplayActivity extends Activity {
     private volatile int activeFetchToken = 0;
     private volatile long refreshMs = DEFAULT_REFRESH_MS;
     /** Last displayed API image; used for screensaver file when allow-sleep + write-screensaver. */
-    private Bitmap lastDisplayedImage;
+    private volatile Bitmap lastDisplayedImage; // read by the background screensaver writer
     /** The image shown before lastDisplayedImage — swipe-back fallback when the server sends no image. */
     private Bitmap previousDisplayedImage;
     /** One-shot: the next API request asks for the previous screen (special_function: rewind). */
@@ -991,15 +991,46 @@ public class DisplayActivity extends Activity {
         if (bootLayout != null) bootLayout.setVisibility(View.GONE);
         imageView.setImageBitmap(bmp);
         lastDisplayedImage = bmp;
-        writeScreenshotToScreensaver(bmp);
         imageView.setVisibility(View.VISIBLE);
         if (imageRotateLayout != null) imageRotateLayout.setVisibility(View.VISIBLE);
         if (contentScroll != null) contentScroll.setVisibility(View.GONE);
         if (logView != null) logView.setVisibility(View.GONE);
-        hideMenu();
+        // hideMenu() always plays the e-ink transition flash, which would flash the
+        // *old* image before the new one is drawn - only do it if a menu is open.
+        if (menuVisible) hideMenu();
         logD("displayed cached image");
         forceFullRefresh();
+        // PNG-compressing the screensaver takes a second or two on the NOOK; doing it
+        // here on the UI thread delayed the new image. Write it in the background
+        // once the image is on screen.
+        writeScreensaverInBackground(bmp);
         if (resumeCycle) scheduleNextCycle();
+    }
+
+    /** writeScreenshotToScreensaver() off the UI thread (it is synchronized). */
+    private void writeScreensaverInBackground(final Bitmap bmp) {
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    writeScreensaverIfStillShown(bmp);
+                } catch (Throwable t) {
+                    logW("background screensaver write failed: " + t);
+                }
+            }
+        }, "screensaver-write").start();
+    }
+
+    /**
+     * Rapid flips start several background writes; under the writer's lock, skip
+     * any whose image is no longer on screen so an older one can't finish last
+     * and leave the wrong screen as the screensaver.
+     */
+    private synchronized void writeScreensaverIfStillShown(Bitmap bmp) {
+        if (bmp != lastDisplayedImage) {
+            logD("screensaver write skipped - image no longer shown");
+            return;
+        }
+        writeScreenshotToScreensaver(bmp);
     }
 
     /** Minimum finger travel (px) for a touch to count as a swipe. */
@@ -1527,7 +1558,7 @@ public class DisplayActivity extends Activity {
      * If /media is unavailable (USB mass storage mounted on a computer), the write is
      * remembered and retried on media-mounted broadcast / next resume (#42). Repeat
      * writes of the same bitmap are skipped (#49). */
-    private void writeScreenshotToScreensaver(Bitmap bitmap) {
+    private synchronized void writeScreenshotToScreensaver(Bitmap bitmap) {
         if (bitmap == null) return;
         String path = ApiPrefs.getScreensaverPath();
         if (path == null || path.length() == 0) return;
