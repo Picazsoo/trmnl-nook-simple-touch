@@ -1069,9 +1069,9 @@ public class DisplayActivity extends Activity {
      * user's left/right is the physical Y axis: a swipe right, as the user sees
      * it, increases raw Y.
      *
-     * Detected at the activity level so it works over every child view. A
-     * recognised gesture (or a plain tap) gives the views ACTION_CANCEL instead
-     * of ACTION_UP, so their tap-to-toggle-menu click does not fire. Only active
+     * Detected at the activity level and consumed there: the child views never
+     * see a gesture on the image, so neither their tap-to-toggle-menu click nor
+     * their pressed-state redraw (a full-screen e-ink update) happens. Only active
      * while the image is shown: on the boot/error screen a tap still opens the
      * menu ("tap to retry") and drags still scroll the log. Disabled while the
      * menu is open (taps work normally there) and in gift mode.
@@ -1088,27 +1088,33 @@ public class DisplayActivity extends Activity {
                 swipeDownY = ev.getY();
                 refreshHandler.removeCallbacks(longPressRunnable);
                 if (gestureTracking) {
+                    // Consume the whole gesture here: the child views never see it,
+                    // so the clickable full-screen image never toggles its pressed
+                    // state - each toggle redraws the whole screen, which the e-ink
+                    // panel can turn into a full flash on every touch.
+                    // super.dispatchTouchEvent() would have called this for us.
+                    logD("touch down (gesture on image)");
+                    onUserInteraction();
                     refreshHandler.postDelayed(longPressRunnable, LONG_PRESS_MS);
+                    return true;
                 }
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (gestureTracking && !longPressFired) {
-                    float mx = Math.abs(ev.getX() - swipeDownX);
-                    float my = Math.abs(ev.getY() - swipeDownY);
-                    if (Math.max(mx, my) > LONG_PRESS_SLOP_PX) {
-                        refreshHandler.removeCallbacks(longPressRunnable);
+                if (gestureTracking) {
+                    if (!longPressFired) {
+                        float mx = Math.abs(ev.getX() - swipeDownX);
+                        float my = Math.abs(ev.getY() - swipeDownY);
+                        if (Math.max(mx, my) > LONG_PRESS_SLOP_PX) {
+                            refreshHandler.removeCallbacks(longPressRunnable);
+                        }
                     }
+                    return true;
                 }
                 break;
             case MotionEvent.ACTION_UP:
                 refreshHandler.removeCallbacks(longPressRunnable);
                 if (gestureTracking) {
                     gestureTracking = false;
-                    // Swallow the UP so no child click (menu toggle) fires.
-                    MotionEvent cancel = MotionEvent.obtain(ev);
-                    cancel.setAction(MotionEvent.ACTION_CANCEL);
-                    super.dispatchTouchEvent(cancel);
-                    cancel.recycle();
                     if (longPressFired) {
                         return true; // menu is already open
                     }
@@ -1131,7 +1137,10 @@ public class DisplayActivity extends Activity {
                 break;
             case MotionEvent.ACTION_CANCEL:
                 refreshHandler.removeCallbacks(longPressRunnable);
-                gestureTracking = false;
+                if (gestureTracking) {
+                    gestureTracking = false;
+                    return true; // children never saw this gesture
+                }
                 break;
         }
         return super.dispatchTouchEvent(ev);
@@ -2447,6 +2456,16 @@ public class DisplayActivity extends Activity {
 
     /** Trigger NOOK Simple Touch hardware e-ink refresh via sysfs. */
     private void triggerEpdRefresh() {
+        // Log who asked for the (flashing) full refresh, to trace unexpected flashes.
+        try {
+            StackTraceElement[] st = new Throwable().getStackTrace();
+            StringBuilder from = new StringBuilder();
+            for (int i = 1; i < st.length && i <= 3; i++) {
+                if (i > 1) from.append(" < ");
+                from.append(st[i].getMethodName());
+            }
+            logD("epd refresh (" + from + ")");
+        } catch (Throwable ignored) {}
         try {
             java.io.FileWriter fw = new java.io.FileWriter(
                 "/sys/devices/platform/omap3epfb.0/graphics/fb0/epd_refresh");
