@@ -2533,6 +2533,12 @@ public class DisplayActivity extends Activity {
             return false;
         }
         if (!ApiPrefs.hasCredentials(this)) {
+            // Fresh install: pick up trmnl-config.txt from the SD card / My Files if present.
+            ConfigFileImporter.importIfNeeded(this, new ConfigFileImporter.Logger() {
+                public void log(String msg) { logD(msg); }
+            });
+        }
+        if (!ApiPrefs.hasCredentials(this)) {
             startActivity(new Intent(this, SettingsActivity.class));
             return false;
         }
