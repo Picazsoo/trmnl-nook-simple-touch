@@ -1638,7 +1638,20 @@ public class DisplayActivity extends Activity {
     }
 
     private void setCornerIndicator(int mode) {
-        if (cornerIndicator != null) cornerIndicator.setMode(mode);
+        if (cornerIndicator == null) return;
+        boolean changed = cornerIndicator.getMode() != mode;
+        cornerIndicator.setMode(mode);
+        // The panel doesn't redraw a small invalidated view on its own - the badge
+        // otherwise only appears with the next full refresh (after a new image), by
+        // which time a loading arrow is already gone. Push the arrows to the panel
+        // now; "awake" needs no push since it's set alongside a full refresh.
+        if (changed && (mode == CornerIndicatorView.FORWARD || mode == CornerIndicatorView.BACKWARD)) {
+            cornerIndicator.postDelayed(new Runnable() {
+                public void run() {
+                    triggerEpdRefresh();
+                }
+            }, 100); // after the view is in the framebuffer, as in forceFullRefresh()
+        }
     }
 
     /** A fetch ended (completed, failed, timed out or was cancelled): arrow back to "awake". */
