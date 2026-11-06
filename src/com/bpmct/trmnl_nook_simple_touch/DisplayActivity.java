@@ -317,14 +317,7 @@ public class DisplayActivity extends Activity {
             public boolean onTouch(View v, MotionEvent event) {
                 if (event.getAction() == MotionEvent.ACTION_UP) {
                     logD("menu: next tapped");
-                    if (USE_GENERIC_IMAGE) {
-                        hideMenu();
-                        showGenericImageAndSleep();
-                    } else {
-                        fetchReason = "menu-next";
-                        showMenuStatus("Loading...", false);
-                        startFetch();
-                    }
+                    requestNextScreen();
                     return true;
                 }
                 return false;
@@ -892,6 +885,68 @@ public class DisplayActivity extends Activity {
     }
 
     private static final long WIFI_WARMUP_MS = 15 * 1000;
+
+    /** Advance to the next playlist screen — shared by the menu's Next button and swipe. */
+    private void requestNextScreen() {
+        if (USE_GENERIC_IMAGE) {
+            hideMenu();
+            showGenericImageAndSleep();
+        } else {
+            fetchReason = "menu-next";
+            showMenuStatus("Loading...", false);
+            startFetch();
+        }
+    }
+
+    /** Minimum finger travel (px, any direction) for a touch to count as a swipe. */
+    private static final int SWIPE_MIN_DISTANCE_PX = 120;
+    private float swipeDownX;
+    private float swipeDownY;
+    private boolean swipeTracking = false;
+
+    /**
+     * Swipe anywhere on the image (any direction) to advance to the next screen,
+     * same as Menu → Next. Detected at the activity level so it works over every
+     * child view; the distance check is direction-agnostic, so the RotateLayout's
+     * 90° coordinate swap doesn't matter. When a swipe is recognised the views get
+     * ACTION_CANCEL instead of ACTION_UP, so the tap-to-toggle-menu click does not
+     * also fire. Only active while the image is shown; disabled while the menu is
+     * open and in gift mode (where Next is "Gallery").
+     */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        switch (ev.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                // Only over the displayed image — the boot/error log and text
+                // content are scrollable, and a scroll drag must not count.
+                swipeTracking = !menuVisible && !giftScreenVisible
+                        && imageView != null && imageView.getVisibility() == View.VISIBLE
+                        && !ApiPrefs.isGiftModeEnabled(this);
+                swipeDownX = ev.getX();
+                swipeDownY = ev.getY();
+                break;
+            case MotionEvent.ACTION_UP:
+                if (swipeTracking) {
+                    swipeTracking = false;
+                    float dx = Math.abs(ev.getX() - swipeDownX);
+                    float dy = Math.abs(ev.getY() - swipeDownY);
+                    if (Math.max(dx, dy) >= SWIPE_MIN_DISTANCE_PX) {
+                        MotionEvent cancel = MotionEvent.obtain(ev);
+                        cancel.setAction(MotionEvent.ACTION_CANCEL);
+                        super.dispatchTouchEvent(cancel);
+                        cancel.recycle();
+                        logD("swipe: next");
+                        requestNextScreen();
+                        return true;
+                    }
+                }
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                swipeTracking = false;
+                break;
+        }
+        return super.dispatchTouchEvent(ev);
+    }
 
     @Override
     public void onUserInteraction() {
@@ -1795,14 +1850,7 @@ public class DisplayActivity extends Activity {
                     public boolean onTouch(View v, MotionEvent event) {
                         if (event.getAction() == MotionEvent.ACTION_UP) {
                             logD("menu: next tapped");
-                            if (USE_GENERIC_IMAGE) {
-                                hideMenu();
-                                showGenericImageAndSleep();
-                            } else {
-                                fetchReason = "menu-next";
-                                showMenuStatus("Loading...", false);
-                                startFetch();
-                            }
+                            requestNextScreen();
                             return true;
                         }
                         return false;

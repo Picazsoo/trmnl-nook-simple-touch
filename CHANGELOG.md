@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Swipe to advance** - Swipe anywhere on the displayed image (any direction) to load the next playlist screen, same as tapping the screen and choosing Next. Taps still open the menu. Inactive while the menu is open, on the boot/log screen, and in gift mode.
+
 ## [v0.16.0] - 2026-08-31
 
 ### Fixed
