@@ -40,6 +40,7 @@ public class SettingsActivity extends Activity {
     private CheckBox allowSelfSignedCheck;
     private CheckBox autoDisableWifiCheck;
     private EditText wifiTimeoutInput;
+    private EditText idleSleepInput;
     private TextView wifiStatusView;
     private FrameLayout rootLayout;
     private FrameLayout outerRoot;
@@ -145,10 +146,37 @@ public class SettingsActivity extends Activity {
         superSleepHint.setVisibility(allowSleepCheck.isChecked() ? View.VISIBLE : View.GONE);
         panelGeneral.addView(superSleepHint);
 
+        // Idle sleep delay: label + number field + hint, shown only with sleep enabled.
+        final LinearLayout idleSleepRow = new LinearLayout(this);
+        idleSleepRow.setOrientation(LinearLayout.VERTICAL);
+        idleSleepRow.setPadding(40, 8, 0, 0);
+        TextView idleSleepLabel = new TextView(this);
+        idleSleepLabel.setText("Sleep after no touch for (seconds)");
+        idleSleepLabel.setTextColor(0xFF000000);
+        idleSleepRow.addView(idleSleepLabel);
+        idleSleepInput = new EditText(this);
+        idleSleepInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        idleSleepInput.setTextColor(0xFF000000);
+        idleSleepInput.setText(String.valueOf(ApiPrefs.getIdleSleepSeconds(this)));
+        LinearLayout.LayoutParams idleSleepInputParams = new LinearLayout.LayoutParams(
+                160, ViewGroup.LayoutParams.WRAP_CONTENT);
+        idleSleepInputParams.topMargin = 4;
+        idleSleepRow.addView(idleSleepInput, idleSleepInputParams);
+        TextView idleSleepHint = new TextView(this);
+        idleSleepHint.setText("How long the screen stays awake after your last touch, swipe or update ("
+                + ApiPrefs.MIN_IDLE_SLEEP_SECONDS + "–" + ApiPrefs.MAX_IDLE_SLEEP_SECONDS
+                + "s, default " + ApiPrefs.DEFAULT_IDLE_SLEEP_SECONDS + "s).");
+        idleSleepHint.setTextSize(11);
+        idleSleepHint.setTextColor(0xFF888888);
+        idleSleepRow.addView(idleSleepHint);
+        idleSleepRow.setVisibility(allowSleepCheck.isChecked() ? View.VISIBLE : View.GONE);
+        panelGeneral.addView(idleSleepRow);
+
         allowSleepCheck.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 superSleepCheck.setVisibility(isChecked ? View.VISIBLE : View.GONE);
                 superSleepHint.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+                idleSleepRow.setVisibility(isChecked ? View.VISIBLE : View.GONE);
                 flashRefresh();
             }
         });
@@ -608,6 +636,7 @@ public class SettingsActivity extends Activity {
         if (allowSelfSignedCheck != null) allowSelfSignedCheck.setChecked(ApiPrefs.isAllowSelfSignedCerts(this));
         if (autoDisableWifiCheck != null) autoDisableWifiCheck.setChecked(ApiPrefs.isAutoDisableWifi(this));
         if (wifiTimeoutInput != null) wifiTimeoutInput.setText(String.valueOf(ApiPrefs.getWifiConnectTimeoutSeconds(this)));
+        if (idleSleepInput != null) idleSleepInput.setText(String.valueOf(ApiPrefs.getIdleSleepSeconds(this)));
         if (wifiStatusView != null) wifiStatusView.setText(getWifiStatusText());
     }
 
@@ -635,6 +664,16 @@ public class SettingsActivity extends Activity {
             if (raw.length() > 0) {
                 try {
                     ApiPrefs.setWifiConnectTimeoutSeconds(this, Integer.parseInt(raw));
+                } catch (NumberFormatException nfe) {
+                    // Leave the existing value untouched on bad input.
+                }
+            }
+        }
+        if (idleSleepInput != null) {
+            String raw = idleSleepInput.getText() != null ? idleSleepInput.getText().toString().trim() : "";
+            if (raw.length() > 0) {
+                try {
+                    ApiPrefs.setIdleSleepSeconds(this, Integer.parseInt(raw));
                 } catch (NumberFormatException nfe) {
                     // Leave the existing value untouched on bad input.
                 }

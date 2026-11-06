@@ -81,9 +81,11 @@ public class DisplayActivity extends Activity {
     private static final int DEFAULT_SCREEN_TIMEOUT_MS = 120000;
     /** In normal (non-aggressive) sleep mode, force sleep after this much idle time following
      * sleep-ready — instead of depending on the device's own screensaver timeout, which may
-     * be 15m+ (or effectively never), leaving the screen on all day (#49). 2 min matches the
-     * long-documented "device sleeps within 2 minutes" behavior. */
-    private static final long IDLE_FORCED_SLEEP_MS = 2 * 60 * 1000;
+     * be 15m+ (or effectively never), leaving the screen on all day (#49). Configurable in
+     * Settings → General ("Sleep after no touch for"), default 30 s. */
+    private long idleForcedSleepMs() {
+        return ApiPrefs.getIdleSleepSeconds(this) * 1000L;
+    }
     private TextView contentView;
     private TextView logView;
     private ImageView imageView;
@@ -1360,7 +1362,7 @@ public class DisplayActivity extends Activity {
     }
 
     /** Arm (or re-arm) the idle forced sleep used by normal sleep mode: after
-     * IDLE_FORCED_SLEEP_MS with no user interaction, apply the same screen-timeout
+     * idleForcedSleepMs() with no user interaction, apply the same screen-timeout
      * trick sleepNow() uses so the device reliably blanks and shows the screensaver.
      * Cancelled by onPause/sleepNow/exit; re-armed by onUserInteraction. */
     private void scheduleIdleForcedSleep() {
@@ -1373,7 +1375,7 @@ public class DisplayActivity extends Activity {
                 pendingIdleSleepRunnable = null;
                 if (!ApiPrefs.isAllowSleep(DisplayActivity.this)) return;
                 if (fetchInProgress) return; // never blank mid-fetch; next cycle re-arms
-                logD("idle " + (IDLE_FORCED_SLEEP_MS / 1000L) + "s after sleep-ready — forcing sleep");
+                logD("idle " + (idleForcedSleepMs() / 1000L) + "s after sleep-ready — forcing sleep");
                 sleepPending = true;
                 try {
                     android.provider.Settings.System.putInt(
@@ -1385,7 +1387,7 @@ public class DisplayActivity extends Activity {
                 }
             }
         };
-        refreshHandler.postDelayed(pendingIdleSleepRunnable, IDLE_FORCED_SLEEP_MS);
+        refreshHandler.postDelayed(pendingIdleSleepRunnable, idleForcedSleepMs());
     }
 
     /** Show bundled generic image (res/drawable-mdpi/generic_display.jpg) and, if allow-sleep, write it as screensaver and go to sleep. */

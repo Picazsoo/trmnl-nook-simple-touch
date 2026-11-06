@@ -31,6 +31,13 @@ public class ApiPrefs {
      *  too long = battery drain waiting on a dead network). */
     public static final int MIN_WIFI_CONNECT_TIMEOUT_SECONDS = 5;
     public static final int MAX_WIFI_CONNECT_TIMEOUT_SECONDS = 120;
+    private static final String KEY_IDLE_SLEEP = "idle_sleep_seconds";
+    /** How long the display screen stays awake without interaction before forced sleep. */
+    public static final int DEFAULT_IDLE_SLEEP_SECONDS = 30;
+    /** Clamp bounds: too short and the device sleeps while you're still looking/swiping,
+     *  too long and it burns battery with the screen awake. */
+    public static final int MIN_IDLE_SLEEP_SECONDS = 10;
+    public static final int MAX_IDLE_SLEEP_SECONDS = 600;
     private static final String SCREENSAVER_PATH = "/media/screensavers/TRMNL/display.png";
 
     public static boolean hasCredentials(Context context) {
@@ -411,6 +418,22 @@ public class ApiPrefs {
         if (seconds > MAX_WIFI_CONNECT_TIMEOUT_SECONDS) seconds = MAX_WIFI_CONNECT_TIMEOUT_SECONDS;
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putInt(KEY_WIFI_CONNECT_TIMEOUT, seconds).commit();
+    }
+
+    /** Seconds without interaction on the display screen before forced sleep (normal sleep mode). */
+    public static int getIdleSleepSeconds(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        int seconds = prefs.getInt(KEY_IDLE_SLEEP, DEFAULT_IDLE_SLEEP_SECONDS);
+        if (seconds < MIN_IDLE_SLEEP_SECONDS) seconds = MIN_IDLE_SLEEP_SECONDS;
+        if (seconds > MAX_IDLE_SLEEP_SECONDS) seconds = MAX_IDLE_SLEEP_SECONDS;
+        return seconds;
+    }
+
+    public static void setIdleSleepSeconds(Context context, int seconds) {
+        if (seconds < MIN_IDLE_SLEEP_SECONDS) seconds = MIN_IDLE_SLEEP_SECONDS;
+        if (seconds > MAX_IDLE_SLEEP_SECONDS) seconds = MAX_IDLE_SLEEP_SECONDS;
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putInt(KEY_IDLE_SLEEP, seconds).commit();
     }
 
     /** Whether the initial screensaver has been written to disk at least once. */
